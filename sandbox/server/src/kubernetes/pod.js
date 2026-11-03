@@ -1,3 +1,4 @@
+import { V1VolumeMount } from "@kubernetes/client-node";
 import { k8sCoreV1Api } from "./config.js";
 
 export async function createPod(sandboxId) {
@@ -11,18 +12,65 @@ export async function createPod(sandboxId) {
          }
       },
         spec: {
+         volumes:[
+           { 
+            name:"workspace-volume",
+            emptyDir:{}
+         }
+         ],
+
+          initContainers : [
+              {
+                name:'init-container',
+                image:"template",
+                imagePullPolicy:"IfNotPresent",
+                command: ['sh', '-c' , 'cp -r /workspace/. /seed/'],
+                volumeMounts:[
+                    {
+                        name:'workspace-volume',
+                        mountPath: '/seed'
+                    }
+                ]
+              }
+          ],
                 containers:[
                     {image:"template",
                     imagePullPolicy:"IfNotPresent",
                     name:"sandbox-container",
                     ports:[{containerPort:5173,name:"http"}] ,
                     resources :{
-                        limits:{cpu:"500m", memory:"1Gi"},
-                         requests:{cpu:"250m",memory:"512Mi"  }
-                    }   
+                        limits:{cpu:"500m", memory:"512Mi"},
+                         requests:{cpu:"100m",memory:"128Mi"  }
+                    }  ,
+
+                    volumeMounts:[
+                     {
+                        name:"workspace-volume",
+                        mountPath:"/workspace"
+                     }
+                    ]
+
+
+                },
+                {
+                    image:"agent",
+                    imagePullPolicy:"IfNotPresent",
+                    name:"agent-container",
+                    ports:[{containerPort:3000,name:"http"}] ,
+                    resources :{
+                        limits:{cpu:"250m", memory:"256Mi"},
+                         requests:{cpu:"50m",memory:"64Mi"  }
+                    },
+                    volumeMounts:[
+                        {
+                            name:"workspace-volume",
+                            mountPath:"/workspace"
+                        }
+                    ]
                 }
              ]
-        }
+         }
+      
    }
 
    const response = await k8sCoreV1Api.createNamespacedPod({
