@@ -1,60 +1,79 @@
-# ☸️ Kubernetes (k8s) Configurations
+# ☸️ Kubernetes (k8s) Infrastructure & Manifests
 
-Is folder mein Kubernetes ke saare YAML manifest files hain jo poore platform ko deploy, connect, aur manage karte hain.
+This directory contains the declarative Kubernetes manifests responsible for deploying, networking, and securing all platform services within the cluster.
 
 ---
 
-## 📁 Files Overview
+## 📁 Manifests Reference
 
-| File | Type | Port | Kaam |
+| File | Resource Kind | Port Mapping | Description |
 | :--- | :--- | :--- | :--- |
-| **`ingress.yml`** | Ingress | 80 | External traffic ko path aur subdomain ke hisaab se route karta hai. |
-| **`rbac.yml`** | RBAC | - | `resource-manager` ServiceAccount aur permissions deta hai taaki API server dynamic pods bana sake. |
-| **`sandbox-deployment.yml`** | Deployment | 3000 | Main API Server (`sandbox:v2`) ka container manage karta hai. |
-| **`sandbox.service.yml`** | Service | 80 → 3000 | API Server pods ke aage stable IP provide karta hai (selector: `app: sandbox, tier: api`). |
-| **`router-deployment.yml`** | Deployment | 3000 | Router reverse-proxy (`router:v2`) container manage karta hai. |
-| **`router-service.yml`** | Service | 80 → 3000 | Router pods ke aage stable IP provide karta hai (selector: `app: router`). |
+| **`ingress.yaml`** | `Ingress` (NGINX) | `80` (HTTP) | Central edge router handling host and path routing with 300s timeout annotations for long-running AI code generation. |
+| **`rbac.yaml`** | `ServiceAccount`, `Role`, `RoleBinding` | — | Configures the `resource-manager` identity with RBAC verbs (`get`, `list`, `watch`, `create`, `delete`) on `pods` and `services`. |
+| **`ai-deployment.yaml`** | `Deployment` | `3000` | Autonomous AI coding agent (`ai-orchestration`) with 2 replicas, `1Gi` RAM limit, and secret injection from `ai-secret`. |
+| **`ai-service.yaml`** | `Service` (`ClusterIP`) | `80 → 3000` | Internal load-balanced service exposing the AI agent to Ingress at `/api/ai`. |
+| **`sandbox-deployment.yaml`** | `Deployment` | `3000` | Sandbox API Server (`sandbox:v2`) managing dynamic pod lifecycles. |
+| **`sandbox-service.yaml`** | `Service` (`ClusterIP`) | `80 → 3000` | Internal service exposing the Sandbox API to Ingress at `/api/sandbox`. |
+| **`router-deployment.yaml`** | `Deployment` | `3000` | Dynamic reverse proxy (`router:v4`) responsible for subdomain routing. |
+| **`router-service.yaml`** | `Service` (`ClusterIP`) | `80 → 3000` | Internal service exposing the Router to `*.preview.localhost` and `*.agent.localhost`. |
 
 ---
 
-## 🔗 Yeh Folder Dusre Folders Se Kaise Connect Hai?
+## 🌐 Ingress Routing Topology
 
 ```
-[User Browser]
-       │
-       ▼
-[k8s/ingress.yml] (Port 80)
-       ├── /api/sandbox/* ──────► [k8s/sandbox.service.yml] ──► [sandbox/server]
-       └── *.preview.localhost ─► [k8s/router-service.yml]  ──► [sandbox/router] ──► [sandbox/template pods]
+User Traffic (Port 80)
+      │
+      ▼
+[codespace-ingress] (k8s/ingress.yaml)
+      ├── Path: /api/sandbox/*  ──────────► sandbox-service:80 ──► Sandbox Manager Pod (:3000)
+      ├── Path: /api/ai/*       ──────────► ai-service:80      ──► AI Orchestration Pod (:3000)
+      ├── Host: *.preview.localhost ──────► router-service:80  ──► Router Pod (:3000) ──► sandbox-service-<id>:80 (Vite :5173)
+      └── Host: *.agent.localhost   ──────► router-service:80  ──► Router Pod (:3000) ──► sandbox-service-<id>:3000 (Agent :3000)
 ```
-
-1. **`sandbox/server` se connection:**
-   - `sandbox-deployment.yml` `sandbox:v2` Docker image ko chalata hai.
-   - `rbac.yml` API server ko permission deta hai taaki woh code se naye pods bana sake.
-   - `sandbox.service.yml` Ingress ke requests ko API server tak bhejta hai.
-
-2. **`sandbox/router` se connection:**
-   - `router-deployment.yml` `router:v2` Docker image ko chalata hai.
-   - `router-service.yml` Ingress se aane wale `*.preview.localhost` traffic ko Router pod tak bhejta hai.
-
-3. **`sandbox/template` se connection:**
-   - API server dynamically naye `sandbox-pod-<id>` aur `sandbox-service-<id>` create karta hai jo `template` image use karte hain.
 
 ---
 
-## 🚀 Apply Karne Ka Order
+## 🔐 RBAC Configuration (`rbac.yaml`)
 
-```powershell
-# Sabse pehle RBAC permissions apply karo
-kubectl apply -f k8s/rbac.yml
+Dynamic sandboxes require programmatic creation of Kubernetes resources directly from the Node.js application layer. 
 
-# Services aur Deployments apply karo
-kubectl apply -f k8s/sandbox.service.yml
-kubectl apply -f k8s/sandbox-deployment.yml
-kubectl apply -f k8s/router-service.yml
-kubectl apply -f k8s/router-deployment.yml
+- **ServiceAccount:** `resource-manager`
+- **Role:** `resource-manager` with permissions over `pods` and `services`
+- **RoleBinding:** Binds the `resource-manager` ServiceAccount to the role within the `default` namespace.
+- **Consumption:** Assigned to `sandbox-deployment.yaml` via `spec.template.spec.serviceAccountName: resource-manager`.
 
-# Ingress apply karo (Traffic entrypoint)
-kubectl apply -f k8s/ingress.yml
+---
+
+## ⏱️ Ingress Timeout Optimization
+
+AI agents writing multi-file applications with LangChain and Google Gemini can take 60–120 seconds. Standard NGINX Ingress defaults (60s) trigger `504 Gateway Timeout`. The following annotations are configured in `ingress.yaml`:
+
+```yaml
+annotations:
+  nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+  nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+  nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
 ```
 
+---
+
+## 🚀 Manual Deployment Order
+
+While **Skaffold** (`skaffold dev`) is the recommended orchestrator, manifests can be applied manually in this specific dependency order:
+
+```bash
+# 1. Apply RBAC permissions first
+kubectl apply -f k8s/rbac.yaml
+
+# 2. Deploy core services and their respective deployments
+kubectl apply -f k8s/sandbox-service.yaml
+kubectl apply -f k8s/sandbox-deployment.yaml
+kubectl apply -f k8s/router-service.yaml
+kubectl apply -f k8s/router-deployment.yaml
+kubectl apply -f k8s/ai-service.yaml
+kubectl apply -f k8s/ai-deployment.yaml
+
+# 3. Apply Ingress routing rules
+kubectl apply -f k8s/ingress.yaml
+```

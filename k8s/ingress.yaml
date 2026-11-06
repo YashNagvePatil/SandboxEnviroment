@@ -4,6 +4,10 @@ metadata:
   name: codespace-ingress
   labels:
     app.kubernetes.io/name: codespace-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
 spec:
   ingressClassName: nginx
   rules:
@@ -16,6 +20,16 @@ spec:
             name: sandbox-service
             port:
               number: 80
+    
+  - http:
+      paths:
+      - pathType: Prefix
+        path: "/api/ai"
+        backend:
+          service:
+            name: ai-service
+            port:
+              number: 80 
 
   - host: "*.preview.localhost"
     http:
@@ -39,3 +53,5 @@ spec:
             name: router-service
             port:
               number: 80
+
+           
