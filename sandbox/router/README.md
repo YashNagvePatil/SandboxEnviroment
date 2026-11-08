@@ -1,50 +1,83 @@
-# 🔀 Sandbox Dynamic Router (`sandbox/router`)
+# 🔀 Dynamic Reverse Proxy Router (`sandbox/router`)
 
-Yeh service platform ka **Reverse Proxy Engine** hai. Iska kaam har user ke unique subdomain request ko sahi isolated sandbox container tak pahunchana hai.
-
----
-
-## 🎯 Main Motive & Real-Life Analogy
-- **Real Life Example:** CodeSandbox mein jab aap project kholte hain toh aapko `https://3xk9f-5173.csb.app` jaisa link milta hai. Ek central proxy us subdomain ko padhkar aapke specific container tak connect karti hai.
-- **Yahan:** Jab user `http://<sandboxId>.preview.localhost` open karta hai, toh yeh Router request intercept karta hai aur `sandboxId` padhkar request ko `http://sandbox-service-<sandboxId>` par bhej deta hai.
+The Dynamic Router is the platform's central reverse-proxy engine. It dynamically routes incoming HTTP and WebSocket traffic based on request subdomains to the appropriate isolated Kubernetes sandbox services.
 
 ---
 
-## 📂 File Structure & Explanations
+## 🎯 Core Responsibilities
+
+- **Subdomain-Based Demultiplexing:** Inspects the incoming `Host` header to determine the targeted `sandboxId` and target type (`preview` or `agent`).
+- **Dual-Mode Routing:**
+  - `http://<sandboxId>.preview.localhost` → Proxies to internal Vite frontend dev server at `http://sandbox-service-<sandboxId>:80` (target port 5173).
+  - `http://<sandboxId>.agent.localhost` → Proxies to internal sidecar file manager at `http://sandbox-service-<sandboxId>:3000` (target port 3000).
+- **WebSocket & HMR Support:** Enables bidirectional WebSocket streaming (`ws: true`) required by Vite's Hot Module Replacement (HMR).
+- **Proxy Memoization & Connection Caching:** Caches `http-proxy-middleware` instances in memory per `sandboxId` to prevent socket recreation overhead across high-frequency asset requests.
+
+---
+
+## 📂 File Structure
 
 | File | Purpose |
 | :--- | :--- |
-| **`server.js`** | Express application ko port `3000` par start karta hai. |
-| **`src/app.js`** | Dynamic proxy middleware (`http-proxy-middleware`), health check endpoints (`/api/status/healthz`, `/api/status/readyz`), aur memoized proxy cache (`proxies = {}`). |
-| **`dockerfile`** | `node:20-alpine` base image par build hoti hai (`router:v2`). |
+| **`server.js`** | Express application entrypoint listening on port `3000`. |
+| **`src/app.js`** | Express application configuring health checks (`/api/status/healthz`, `/api/status/readyz`), proxy caches (`proxies = {}`, `agentProxies = {}`), and host header routing middleware. |
+| **`dockerfile`** | Container specification based on `node:22-alpine`. |
 | **`package.json`** | Dependencies: `express`, `http-proxy-middleware`, `morgan`. |
 
 ---
 
-## 🧠 Smart Feature: Proxy Caching / Memoization
+## 🧠 Memoization & Host Header Routing
 
 ```javascript
-const proxies = {}
+const proxies = {};
+const agentProxies = {};
 
-function getProxy(sandboxId) {
-  const target = `http://sandbox-service-${sandboxId}` 
+export function getProxy(sandboxId) {
+  const target = `http://sandbox-service-${sandboxId}`;
   if (!proxies[sandboxId]) {
-    proxies[sandboxId] = createProxyMiddleware({  
-        target,
-        changeOrigin: false,
-        ws: true,
+    proxies[sandboxId] = createProxyMiddleware({
+      target,
+      changeOrigin: false,
+      ws: true,
     });
   }
   return proxies[sandboxId];
 }
+
+export function getAgentProxy(sandboxId) {
+  const target = `http://sandbox-service-${sandboxId}:3000`;
+  if (!agentProxies[sandboxId]) {
+    agentProxies[sandboxId] = createProxyMiddleware({
+      target,
+      changeOrigin: false,
+      ws: true,
+    });
+  }
+  return agentProxies[sandboxId];
+}
 ```
 
-- Har HTTP request (HTML, CSS, JS, Vite HMR WebSocket) par naya proxy middleware create karne ki jagah yeh ek sandbox ke liye sirf 1 baar proxy create karta hai aur memory mein cache kar leta hai.
-- **`changeOrigin: false`** isliye rakha gaya hai taaki browser ka original domain (`*.preview.localhost`) Vite server tak pahuche aur Vite security check pass ho sake.
+### Why `changeOrigin: false`?
+Vite dev server performs security validations on the HTTP `Host` header. Maintaining the client's original subdomain host (`<sandboxId>.preview.localhost`) ensures compatibility with Vite's `server.allowedHosts: true` policy without incurring 403 Forbidden errors.
 
 ---
 
-## 🔗 Connections
-- **Input:** NGINX Ingress (`*.preview.localhost`) → `router-service:80` → `server.js:3000`.
-- **Output:** Kubernetes internal DNS ke zariye specific sandbox service (`http://sandbox-service-<sandboxId>`).
+## 🌐 Network Flow
 
+```
+Client Browser (http://<sandboxId>.preview.localhost)
+       │
+       ▼
+NGINX Ingress (*.preview.localhost)
+       │
+       ▼
+router-service:80 ──► router-server container (:3000)
+                              │
+                    Host Header Parsing
+                              │
+                              ▼
+            Internal K8s DNS: sandbox-service-<sandboxId>:80
+                              │
+                              ▼
+                Vite Dev Server Container (:5173)
+```

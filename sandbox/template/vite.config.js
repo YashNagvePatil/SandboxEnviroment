@@ -11,5 +11,11 @@ export default defineConfig({
     hmr: {
       clientPort: 80
     }
+  },
+
+ watch: {
+    usePolling: true,
+    intervals:300,
+    ignored:["node_modules"]
   }
 })

@@ -22,7 +22,7 @@ export function getProxy(sandboxId) {
   if (!proxies[sandboxId]) {
     proxies[sandboxId] = createProxyMiddleware({
       target,
-      changeOrigin: false,
+      changeOrigin: true,
       ws: true,
     });
   }
@@ -34,7 +34,7 @@ export function getAgentProxy(sandboxId) {
   if (!agentProxies[sandboxId]) {
     agentProxies[sandboxId] = createProxyMiddleware({
       target,
-      changeOrigin: false,
+      changeOrigin: true,
       ws: true,
     });
   }

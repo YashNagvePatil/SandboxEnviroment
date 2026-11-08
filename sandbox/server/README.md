@@ -1,30 +1,71 @@
-# 🖥️ Sandbox API Server (`sandbox/server`)
+# 🖥️ Sandbox API Server / Control Plane (`sandbox/server`)
 
-Yeh service platform ka **Control Plane / Orchestrator** hai. Iska main motive Kubernetes cluster ke saath communicate karke dynamic sandboxes create aur manage karna hai.
-
----
-
-## 🎯 Main Motive
-- **Endpoint 1 (`GET /api/sandbox/health`):** Kubernetes liveness/readiness probe ke liye health check.
-- **Endpoint 2 (`POST /api/sandbox/start`):** Jab bhi koi user naya playground shuru kare, yeh endpoint ek unique UUID banata hai aur Kubernetes API ke through ek Pod aur Service live kar deta hai.
+The Sandbox API Server acts as the central control plane for provisioning and managing on-demand Kubernetes sandboxes. It exposes REST endpoints consumed by client applications and coordinates with the Kubernetes Core API.
 
 ---
 
-## 📂 File Structure & Explanations
+## 🎯 Core Endpoints
+
+### 1. Health Check
+- **Route:** `GET /api/sandbox/health`
+- **Response:**
+  ```json
+  { "message": "Sandbox server is running", "status": "ok" }
+  ```
+- **Role:** Liveness and readiness probe validation within Kubernetes.
+
+### 2. Start Sandbox
+- **Route:** `POST /api/sandbox/start`
+- **Response:**
+  ```json
+  {
+    "message": "Sandbox started successfully",
+    "sandboxId": "01a1ac0e-7a6a-730a-a02e-8e1665ef6fb8",
+    "previewUrl": "http://01a1ac0e-7a6a-730a-a02e-8e1665ef6fb8.preview.localhost"
+  }
+  ```
+- **Operations Performed:**
+  1. Generates a unique time-sortable UUID v7 (`sandboxId`).
+  2. Creates a multi-container Kubernetes Pod (`sandbox-pod-<sandboxId>`).
+  3. Creates a companion Kubernetes Service (`sandbox-service-<sandboxId>`).
+
+---
+
+## 📂 File Structure
 
 | File | Purpose |
 | :--- | :--- |
-| **`server.js`** | App listener jo port `3000` par Express server start karta hai. |
-| **`src/app.js`** | Express routes (`/health`, `/start`) aur middleware setup. |
-| **`src/kubernetes/config.js`** | `@kubernetes/client-node` ko initialize karta hai (`kc.loadFromDefault()`). Cluster ke andar chalte waqt yeh ServiceAccount ke tokens use karta hai. |
-| **`src/kubernetes/pod.js`** | `k8sCoreV1Api.createNamespacedPod()` ko call karta hai. Yeh `template` image se naya container launch karta hai (limits: 500m CPU, 1Gi RAM). |
-| **`src/kubernetes/service.js`** | `k8sCoreV1Api.createNamespacedService()` ko call karta hai jo port 80 ko pod ke containerPort 5173 se link karta hai. |
-| **`dockerfile`** | `node:22-alpine` base image par build hoti hai (`sandbox:v2`). |
+| **`server.js`** | Express application entrypoint listening on port `3000`. |
+| **`src/app.js`** | Route definitions (`/api/sandbox/health`, `/api/sandbox/start`) and Express middleware. |
+| **`src/kubernetes/config.js`** | Initializes `@kubernetes/client-node` using `kc.loadFromDefault()`. When deployed inside a pod, automatically reads the mounted service account credentials. |
+| **`src/kubernetes/pod.js`** | Manifest builder that calls `k8sCoreV1Api.createNamespacedPod()`. Defines `initContainers`, volumes, and the two main containers (`sandbox-container` and `agent-container`). |
+| **`src/kubernetes/service.js`** | Manifest builder that calls `k8sCoreV1Api.createNamespacedService()`. Exposes port 80 (Vite) and port 3000 (Agent) via a `ClusterIP` service. |
+| **`dockerfile`** | Container specification based on `node:22-alpine`. |
+| **`package.json`** | Dependencies: `@kubernetes/client-node`, `express`, `uuid`, `morgan`. |
 
 ---
 
-## 🔗 Connections
-- **Input:** NGINX Ingress (`/api/sandbox/*`) → `sandbox-service:80` → `server.js:3000`.
-- **Output:** Kubernetes API Server (RBAC role `resource-manager` use karke naye resources banata hai).
-- **Target Image:** Naye banne wale pods ke andar `template` image run karta hai.
+## ☸️ Pod & Service Architecture
 
+### Multi-Container Pod Spec (`pod.js`)
+- **Shared Volume:** `workspace-volume` (`emptyDir: {}`)
+- **`initContainers`:**
+  - Name: `init-container`
+  - Image: `template`
+  - Command: `cp -r /workspace/. /seed/` (populates clean React template into the shared volume)
+- **`containers`:**
+  1. **`sandbox-container` (`template` image):**
+     - Port: `5173` (Vite dev server)
+     - Volume Mount: `workspace-volume` at `/workspace`
+     - Resource Limits: `500m` CPU, `512Mi` RAM
+  2. **`agent-container` (`agent` image):**
+     - Port: `3000` (Express file manager)
+     - Volume Mount: `workspace-volume` at `/workspace`
+     - Resource Limits: `250m` CPU, `256Mi` RAM
+
+### Multi-Port Service Spec (`service.js`)
+- **Type:** `ClusterIP`
+- **Selector:** `{ app: "sandbox", sandboxId: "<sandboxId>" }`
+- **Ports:**
+  - `port: 80` → `targetPort: 5173` (named `http-preview`)
+  - `port: 3000` → `targetPort: 3000` (named `http-agent`)

@@ -4,25 +4,78 @@ import { z } from "zod";
 
 /**
  * Creates tools dynamically configured for a specific sandbox.
+ * Tools accept runtime execution context and an event writer.
  * Matches the original sandbox agent API format:
  *   GET  /list-files                      → { files: [...] }
  *   GET  /read-files?files=a,b            → { files: [{"/path": "content"}, ...] }
  *   PATCH /update-files  { updates: [{file, content}] }
- * @param {string} sandboxId
+ * @param {string} defaultSandboxId
+ * @param {Function} [defaultWriter]
  */
-export function createTools(sandboxId) {
-  const baseUrl = `http://sandbox-service-${sandboxId}:3000`;
+export function createTools(defaultSandboxId, defaultWriter = null) {
+  const getBaseUrl = (config) => {
+    const sandboxId = config?.configurable?.sandboxId || defaultSandboxId;
+    return `http://sandbox-service-${sandboxId}:3000`;
+  };
+
+  const emitEvent = (config, payload) => {
+    // Priority 1: Call defaultWriter passed to createTools
+    if (typeof defaultWriter === "function") {
+      try {
+        defaultWriter({
+          timestamp: new Date().toISOString(),
+          ...payload,
+        });
+      } catch (err) {
+        console.warn("[Tool: defaultWriter Error]:", err.message);
+      }
+    }
+
+    // Priority 2: Also call LangGraph internal custom writer if present
+    const lgWriter = config?.writer || config?.configurable?.writer;
+    if (typeof lgWriter === "function" && lgWriter !== defaultWriter) {
+      try {
+        lgWriter(payload);
+      } catch (err) {
+        // ignore
+      }
+    }
+  };
 
   // ── listFiles ─────────────────────────────────────────────────────────────
   const listFiles = tool(
-    async () => {
+    async (_, config) => {
+      const baseUrl = getBaseUrl(config);
+      const projectId = config?.configurable?.projectId;
+
+      emitEvent(config, {
+        event: "tool_start",
+        tool: "listFiles",
+        message: "Exploring project workspace file structure...",
+      });
+
       try {
-        console.log(`[Tool: listFiles] Listing files from ${baseUrl}`);
+        console.log(`[Tool: listFiles] Listing files from ${baseUrl}${projectId ? ` (Project: ${projectId})` : ""}`);
         const response = await axios.get(`${baseUrl}/list-files`, { timeout: 10000 });
         const files = response.data.files || response.data.elements || [];
+
+        emitEvent(config, {
+          event: "tool_end",
+          tool: "listFiles",
+          message: `Found ${files.length} project files.`,
+          data: { filesCount: files.length, files },
+        });
+
         return JSON.stringify(files);
       } catch (err) {
         console.error(`[Tool: listFiles Error]:`, err.message);
+
+        emitEvent(config, {
+          event: "tool_error",
+          tool: "listFiles",
+          message: `Failed to list files: ${err.message}`,
+        });
+
         return `Error listing files: ${err.message}`;
       }
     },
@@ -36,19 +89,42 @@ export function createTools(sandboxId) {
 
   // ── readFiles ─────────────────────────────────────────────────────────────
   const readFiles = tool(
-    async ({ files }) => {
+    async ({ files }, config) => {
+      const baseUrl = getBaseUrl(config);
+      const projectId = config?.configurable?.projectId;
+
+      emitEvent(config, {
+        event: "tool_start",
+        tool: "readFiles",
+        message: `Inspecting source files: ${files.join(", ")}...`,
+        data: { files },
+      });
+
       try {
-        console.log(`[Tool: readFiles] Reading files: ${files.join(", ")}`);
+        console.log(`[Tool: readFiles] Reading files: ${files.join(", ")}${projectId ? ` (Project: ${projectId})` : ""}`);
         const response = await axios.get(
           `${baseUrl}/read-files?files=${files.join(",")}`,
           { timeout: 10000 }
         );
-        // Server returns { files: [{"/workspace/src/App.jsx": "content"}, ...] }
-        // Also handle { results: [...] } for newer versions
         const data = response.data.files || response.data.results || response.data;
+
+        emitEvent(config, {
+          event: "tool_end",
+          tool: "readFiles",
+          message: `Successfully read ${files.length} file(s).`,
+          data: { filesRead: files },
+        });
+
         return JSON.stringify(data);
       } catch (err) {
         console.error(`[Tool: readFiles Error]:`, err.message);
+
+        emitEvent(config, {
+          event: "tool_error",
+          tool: "readFiles",
+          message: `Failed to read files: ${err.message}`,
+        });
+
         return `Error reading files: ${err.message}`;
       }
     },
@@ -66,12 +142,22 @@ export function createTools(sandboxId) {
 
   // ── updateFiles ───────────────────────────────────────────────────────────
   const updateFiles = tool(
-    async ({ files }) => {
+    async ({ files }, config) => {
+      const baseUrl = getBaseUrl(config);
+      const projectId = config?.configurable?.projectId;
+      const filePaths = files.map((f) => f.path);
+
+      emitEvent(config, {
+        event: "tool_start",
+        tool: "updateFiles",
+        message: `Writing updates to ${files.length} file(s): ${filePaths.join(", ")}...`,
+        data: { files: filePaths },
+      });
+
       try {
-        console.log(`[Tool: updateFiles] Updating/creating ${files.length} file(s)`);
+        console.log(`[Tool: updateFiles] Updating/creating ${files.length} file(s) via ${baseUrl}${projectId ? ` (Project: ${projectId})` : ""}`);
 
         // Convert {path, content} → {file, content} for original server format
-        // Also send 'files' field for newer server versions
         const updates = files.map((f) => ({
           file: f.path,
           content: f.content,
@@ -81,13 +167,28 @@ export function createTools(sandboxId) {
           `${baseUrl}/update-files`,
           {
             updates,                        // original format: {file, content}
-            files: files,                   // new format: {path, content}
+            files: files,                   // alternate format: {path, content}
           },
           { timeout: 30000 }
         );
+
+        emitEvent(config, {
+          event: "tool_end",
+          tool: "updateFiles",
+          message: `Successfully saved ${files.length} file(s). Vite Hot Module Reload (HMR) triggered live preview update!`,
+          data: { filesUpdated: filePaths },
+        });
+
         return JSON.stringify(response.data.results || response.data);
       } catch (err) {
         console.error(`[Tool: updateFiles Error]:`, err.message);
+
+        emitEvent(config, {
+          event: "tool_error",
+          tool: "updateFiles",
+          message: `Failed to update files: ${err.message}`,
+        });
+
         return `Error updating files: ${err.message}`;
       }
     },

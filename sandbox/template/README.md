@@ -1,44 +1,56 @@
-# ⚡ React + Vite Sandbox Template (`sandbox/template`)
+# ⚡ React 19 + Vite Sandbox Template (`sandbox/template`)
 
-Yeh folder woh **Starter Template** hai jo har user ke isolated sandbox environment ke andar live run hota hai.
-
----
-
-## 🎯 Main Motive
-- Jab bhi koi user naya playground create karta hai, is template ki Docker image (`template:latest`) ka ek container spin up hota hai.
-- Yeh container port **5173** par Vite dev server chalata hai jismein React 19 application Hot Module Replacement (HMR) ke saath chalti hai.
+This directory contains the starter React application executed within the primary container of every user's isolated sandbox pod.
 
 ---
 
-## 📂 File Structure & Explanations
+## 🎯 Purpose & Features
+
+- **Instant Development Playground:** Cloned into every new sandbox instance on creation.
+- **Modern Frontend Stack:** Powered by **React 19**, **Vite 8**, and modern CSS styling.
+- **Fast Hot Module Replacement (HMR):** Vite watches `/workspace` for real-time code updates and pushes differential asset deltas over WebSockets.
+- **Zero-Latency AI Integrations:** When an AI agent or user updates code files in `/workspace`, Vite updates the preview in real-time without a full page reload.
+
+---
+
+## 📂 File Structure
 
 | File | Purpose |
 | :--- | :--- |
-| **`index.html`** | HTML entrypoint jismein `<div id="root"></div>` aur `<script type="module" src="/src/main.jsx">` load hota hai. |
-| **`vite.config.js`** | Vite dev server configuration (`host: '0.0.0.0'`, `port: 5173`, `allowedHosts: true`). |
-| **`package.json`** | React 19, React DOM, Vite 8 aur dev tooling dependencies. |
-| **`dockerfile`** | `node:22-alpine` base image par `pnpm install` aur `pnpm run dev` chalata hai. |
-| **`src/main.jsx`** | React Root render logic (`ReactDOM.createRoot`). |
-| **`src/App.jsx`** | Default React demo component (Counter, logos, styles). |
-| **`src/App.css` & `index.css`** | UI styles aur dark mode configurations. |
+| **`index.html`** | Single-page application entrypoint containing `<div id="root"></div>` and the module script tag. |
+| **`vite.config.js`** | Vite configuration specifying `0.0.0.0` host binding, port `5173`, and allowed dynamic hosts. |
+| **`dockerfile`** | Container build specification utilizing `node:22-alpine` and `pnpm`. |
+| **`package.json`** | Dependencies: `react@19`, `react-dom@19`, `@vitejs/plugin-react`, `vite@8`. |
+| **`src/main.jsx`** | React DOM entrypoint creating the root and rendering `App` inside `React.StrictMode`. |
+| **`src/App.jsx`** | Default starter component featuring an interactive counter, logo animations, and documentation links. |
+| **`src/App.css` & `index.css`** | Component layout and global theme styles. |
 
 ---
 
-## ⚙️ Vite Configuration Details (`vite.config.js`)
+## ⚙️ Vite Configuration (`vite.config.js`)
 
 ```javascript
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',       // Docker container ke bahar traffic accept karne ke liye
-    port: 5173,            // Port jo pod aur service targetPort se match karta hai
-    allowedHosts: true     // Dynamic subdomain *.preview.localhost ko allow karne ke liye
+    host: '0.0.0.0',       // Binds to all network interfaces inside the container
+    port: 5173,            // Port matched by the Kubernetes service targetPort
+    allowedHosts: true     // Permits traffic from *.preview.localhost subdomains
   }
-})
+});
 ```
+
+- **`host: '0.0.0.0'`:** Essential for container networking. Binding only to `localhost` within the container would block external requests forwarded from Kubernetes service proxies.
+- **`allowedHosts: true`:** Prevents Vite from rejecting requests whose `Host` header is a dynamic subdomain (such as `01a1ac0e-7a6a-730a-a02e-8e1665ef6fb8.preview.localhost`).
 
 ---
 
-## 🔗 Connections
-- **Connected From:** Kubernetes Pod manifest (`sandbox/server/src/kubernetes/pod.js`) is template ki `template` image ko use karta hai.
-- **Port Mapping:** Container port `5173` Kubernetes service (`port 80 -> targetPort 5173`) se judta hai, jo aage Router ke zariye browser tak stream hota hai.
+## 📦 Container Lifecycle
+
+1. **Docker Build:** Compiled with `pnpm` for fast, reproducible, and space-efficient builds.
+2. **Pod Ingestion:**
+   - Used as the source image by `init-container` to populate the shared volume (`/seed` → `/workspace`).
+   - Run as the `sandbox-container` with command `pnpm run dev` to serve the live preview on port `5173`.
