@@ -36,7 +36,19 @@ spec:
             valueFrom:
               secretKeyRef:
                 name: database
-                key: REDIS_URL  
+                key: REDIS_URL 
+
+          - name: JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: jwt
+                key: JWT_SECRET 
+          
+          - name: MONOG_URI
+            valueFrom:
+              secretKeyRef:
+                name: database
+                key: MONOG_URI             
         readinessProbe:
           httpGet:
             path: /api/sandbox/health
